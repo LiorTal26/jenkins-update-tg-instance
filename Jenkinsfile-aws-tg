@@ -1,9 +1,8 @@
 /*********************************************************************
- * Rolling-update Jenkinsfile for Target Group “tg-lior”
- * Adds build-parameter  ⇒ headers_name
+ * Jenkinsfile — Rolling update for Target Group “tg-lior”
  *********************************************************************/
 
-/* ─── Helper functions ──────────────────────────────────────────── */
+/* ─── Helper functions ─────────────────────────────────────────── */
 def get_group_arn(String name) {
     sh(
         script: "aws elbv2 describe-target-groups --names '${name}' --query 'TargetGroups[0].TargetGroupArn' --output text",
@@ -17,120 +16,113 @@ def list_target_ids(String arn) {
     ).trim()
     return ids ? ids.tokenize() : []
 }
-/* ───────────────────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────── */
 
 pipeline {
     agent any
 
-    /* ── Build parameters ── */
+    /* build-time parameters */
     parameters {
         string(name: 'headers_name',
                defaultValue: 'Lior',
                description: 'Header secret to send to Ansible')
     }
 
-    /* ── Static env variables ── */
+    /* static env vars */
     environment {
-        TARGET_GROUP_NAME   = 'tg-lior'
-        REGION              = 'il-central-1'
-        SSH_KEY_PATH        = '~/.ssh/imtec.pem'
-        ANSIBLE_USER        = 'ubuntu'
-        PLAYBOOK            = 'playbook.yml'
+        TARGET_GROUP_NAME = 'tg-lior'
+        REGION            = 'il-central-1'
+        SSH_KEY_PATH      = '~/.ssh/imtec.pem'
+        ANSIBLE_USER      = 'ubuntu'
+        PLAYBOOK          = 'playbook.yml'
 
-        NGINX_PORT_SECRET   = '6789'  // still from creds
-        // headers secret now comes from build param
-        // Jenkins always provides BUILD_NUMBER:
-        JENKINS_BUILD_NUMBER = "${env.BUILD_NUMBER}"
+        NGINX_PORT        = '6789'        // port targets listen on
+        BUILD_NUM         = "${env.BUILD_NUMBER}"
     }
 
     stages {
 
         stage('Opening msg') {
-            steps {
-                echo 'Starting rolling update of all EC2 instances in the target group…'
-            }
+            steps { echo 'Starting rolling update for all targets…' }
         }
 
+        /* Resolve TG ARN & target list */
         stage('Resolve TG & instances') {
             steps {
                 script {
                     env.TARGET_GROUP_ARN = get_group_arn(env.TARGET_GROUP_NAME)
-                    def ids              = list_target_ids(env.TARGET_GROUP_ARN)
-                    env.INSTANCE_IDS     = ids.join(' ')
-                    echo "TG ARN: ${env.TARGET_GROUP_ARN}"
+                    env.INSTANCE_IDS     = list_target_ids(env.TARGET_GROUP_ARN).join(' ')
+                    echo "TG ARN  : ${env.TARGET_GROUP_ARN}"
                     echo "Instances: ${env.INSTANCE_IDS}"
                 }
             }
         }
 
-        /* ───────────────── Generate vars file ──────────────────── */
+        /* Generate roles/nginx/vars/main.yml */
         stage('Generate Ansible vars file') {
             steps {
-                script {
-                    sh """
-                        mkdir -p roles/nginx/vars
-
-                        cat > roles/nginx/vars/main.yml <<EOF
+                sh """
+                  mkdir -p roles/nginx/vars
+                  cat > roles/nginx/vars/main.yml <<EOF
 ---
-nginx_port: ${env.NGINX_PORT_SECRET}
+nginx_port: ${env.NGINX_PORT}
 headers_name: ${params.headers_name}
-jenkins_build_number: ${env.JENKINS_BUILD_NUMBER}
+jenkins_build_number: ${env.BUILD_NUM}
 EOF
-                        echo 'Wrote roles/nginx/vars/main.yml'
-                    """
-                }
+                  echo 'Created roles/nginx/vars/main.yml'
+                """
             }
         }
 
-        /* ─────────────────── Rolling update ───────────────────── */
+        /* Rolling update */
         stage('Rolling update') {
             steps {
                 script {
                     env.INSTANCE_IDS.tokenize().each { instance ->
                         echo "\\n──── Processing ${instance} ────"
 
-                        // 1) Deregister
+                        /* 1) Deregister this instance on port 6789 */
                         sh """
                           aws elbv2 deregister-targets \
                             --target-group-arn ${env.TARGET_GROUP_ARN} \
                             --region ${env.REGION} \
-                            --targets Id=${instance}
+                            --targets Id=${instance},Port=${env.NGINX_PORT}
                         """
 
-                        // 2) Wait until *this* instance is drained
+                        /* 2) Wait until ALB confirms it is out */
                         sh """
                           aws elbv2 wait target-deregistered \
                             --target-group-arn ${env.TARGET_GROUP_ARN} \
                             --region ${env.REGION} \
-                            --targets Id=${instance}
+                            --targets Id=${instance},Port=${env.NGINX_PORT}
                         """
+                        echo "${instance} drained."
 
-                        // 3) Run playbook on host (public IP)
+                        /* 3) Build inventory.ini and run playbook */
                         sh """
                           HOST_IP=\$(aws ec2 describe-instances \
-                                     --instance-ids ${instance} \
-                                     --region ${env.REGION} \
-                                     --query 'Reservations[0].Instances[0].PublicIpAddress' \
-                                     --output text)
+                                       --instance-ids ${instance} \
+                                       --region ${env.REGION} \
+                                       --query 'Reservations[0].Instances[0].PublicIpAddress' \
+                                       --output text)
 
-                          ansible-playbook                        \
-                            -i "\${HOST_IP},"                     \
-                            -u ${env.ANSIBLE_USER}                \
-                            --private-key ${env.SSH_KEY_PATH}     \
-                            ${env.PLAYBOOK}
+                          echo '[servers]' > inventory.ini
+                          echo \"\${HOST_IP} ansible_user=${env.ANSIBLE_USER} ansible_ssh_private_key_file=${env.SSH_KEY_PATH}\" >> inventory.ini
+
+                          ansible-playbook -i inventory.ini ${env.PLAYBOOK}
                         """
 
-                        // 4) Re-register and wait healthy
+                        /* 4) Re-register on port 6789 and wait healthy */
                         sh """
                           aws elbv2 register-targets \
                             --target-group-arn ${env.TARGET_GROUP_ARN} \
                             --region ${env.REGION} \
-                            --targets Id=${instance}
+                            --targets Id=${instance},Port=${env.NGINX_PORT}
 
                           aws elbv2 wait target-in-service \
                             --target-group-arn ${env.TARGET_GROUP_ARN} \
                             --region ${env.REGION} \
-                            --targets Id=${instance}
+                            --targets Id=${instance},Port=${env.NGINX_PORT}
                         """
                         echo "${instance} back in service and healthy."
                     }
@@ -138,9 +130,6 @@ EOF
             }
         }
 
-        stage('Cleanup') {
-            steps { cleanWs() }
-        }
+        stage('Cleanup') { steps { cleanWs() } }
     }
 }
-
