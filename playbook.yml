@@ -1,0 +1,6 @@
+# playbook.yml
+---
+- hosts: servers
+  become: yes
+  roles:
+    - nginx

@@ -1,0 +1,37 @@
+# roles/nginx/tasks/main.yml
+---
+- name: Print nginx port
+  debug:
+    msg: "Nginx will be configured to listen on port {{ nginx_port }}"
+
+- name: Show header_secret
+  debug:
+    msg: "Header secret is {{ headers_name }}"
+
+- name: show jenkins build number
+  debug:
+    msg: "Jenkins build number is {{ jenkins_build_number }}"
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install nginx
+  apt:
+    name: nginx
+    state: present
+
+- name: Add new index.html
+  template:
+    src: files/index.html.j2
+    dest: "/var/www/html/index.html"
+  notify: Reload nginx
+
+- name: Deploy nginx.conf rendered with the selected port
+  template:
+    src: templates/nginx.conf.j2
+    dest: "/etc/nginx/sites-available/default"
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload nginx
