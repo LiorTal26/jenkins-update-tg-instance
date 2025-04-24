@@ -37,7 +37,7 @@ pipeline {
         ANSIBLE_USER        = 'ubuntu'
         PLAYBOOK            = 'playbook.yml'
 
-        NGINX_PORT_SECRET   = credentials('nginx-port')   // still from creds
+        NGINX_PORT_SECRET   = '6789'  // still from creds
         // headers secret now comes from build param
         // Jenkins always provides BUILD_NUMBER:
         JENKINS_BUILD_NUMBER = "${env.BUILD_NUMBER}"
