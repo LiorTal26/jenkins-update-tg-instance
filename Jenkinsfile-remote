@@ -34,7 +34,7 @@ pipeline {
     environment {
         REGION            = 'il-central-1'
         TARGET_GROUP_NAME = 'tg-lior'
-        SSH_KEY_PATH      = '~/.ssh/id_rsa'     // המפתח שיועתק
+        SSH_KEY_PATH      = '~/.ssh/imtec.pem'    
         ANSIBLE_USER      = 'ubuntu'
         PLAYBOOK          = 'playbook.yml'
         NGINX_PORT        = '6789'
