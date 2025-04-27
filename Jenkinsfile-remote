@@ -22,6 +22,20 @@ def ip_to_instance(String ip, String region) {
         returnStdout: true
     ).trim()
 }
+def private_ip_to_instance(String ip, String region) {
+    sh(
+        script: """
+          aws ec2 describe-instances \
+            --filters "Name=private-ip-address,Values=${ip}" \
+            --region ${region} \
+            --query 'Reservations[0].Instances[0].InstanceId' \
+            --output text
+        """,
+        returnStdout: true
+    ).trim()
+}
+
+
 /* ─────────────────────────────────────────────────────────────── */
 
 pipeline {
@@ -47,7 +61,7 @@ pipeline {
             steps {
                 script {
                     if (!params.IP) {
-                        error "IP parameter missing – cloud-init must supply it"
+                        error "IP parameter missing - cloud-init must supply it"
                     }
                     echo "Caller IP: ${params.IP}"
                 }
@@ -109,7 +123,7 @@ EOF
             steps {
                 script {
                     def tgArn      = get_group_arn(env.TARGET_GROUP_NAME, env.REGION)
-                    def instanceId = ip_to_instance(params.IP, env.REGION)
+                    def instanceId = private_ip_to_instance(params.IP, env.REGION)
 
                     echo "Target-Group ARN : ${tgArn}"
                     echo "Instance ID      : ${instanceId}"
@@ -130,3 +144,5 @@ EOF
         }
     }
 }
+
+
