@@ -9,6 +9,7 @@ def get_group_arn(String name, String region) {
         returnStdout: true
     ).trim()
 }
+
 def ip_to_instance(String ip, String region) {
     sh(
         script: """
@@ -21,7 +22,7 @@ def ip_to_instance(String ip, String region) {
         returnStdout: true
     ).trim()
 }
-
+/* ─────────────────────────────────────────────────────────────── */
 
 pipeline {
     agent any
@@ -46,21 +47,21 @@ pipeline {
             steps {
                 script {
                     if (!params.IP) {
-                        error "IP parameter missing - cloud-init must supply it"
+                        error "IP parameter missing – cloud-init must supply it"
                     }
                     echo "Caller IP: ${params.IP}"
                 }
             }
         }
 
-         stage('Add host to known_hosts') {
+        stage('Add host to known_hosts') {
             steps {
-                sshagent(['ansible-ssh-key']) {
-                    sh '''
+                sshagent(credentials: ['ansible-ssh-key']) {
+                    sh """
                         mkdir -p ~/.ssh
                         chmod 700 ~/.ssh
-                        ssh-keyscan -H ${IP} >> ~/.ssh/known_hosts
-                    '''
+                        ssh-keyscan -H ${params.IP} >> ~/.ssh/known_hosts
+                    """
                 }
             }
         }
@@ -69,7 +70,7 @@ pipeline {
             steps {
                 sh """
                   mkdir -p roles/nginx/vars
-                  cat > roles/nginx/vars/main.yml <<'EOF'
+                  cat > roles/nginx/vars/main.yml <<EOF
 ---
 nginx_port: ${env.NGINX_PORT}
 headers_name: ${params.headers_name}
@@ -80,30 +81,26 @@ EOF
             }
         }
 
-        stage('build inventroy') {
+        stage('Build inventory') {
             steps {
-                script {
-                    /* 1. build inventory */
-                    sh """
-                      cat > inventory_dynamic.ini <<'EOF'
+                sh """
+                  cat > inventory_dynamic.ini <<EOF
 [servers]
 ${params.IP} ansible_user=${env.ANSIBLE_USER}
 EOF
-                      echo '[INFO] Created inventory_dynamic.ini'
-                    """
-                    
-                }
+                  echo '[INFO] Created inventory_dynamic.ini'
+                """
             }
         }
-           stage('Build nginx playbook') {
-            steps {
-                sshagent(['ansible-ssh-key']) {
-                    script 
 
-                        sh 'ansible-playbook -i inventory_dynamic.ini \
+        stage('Run Ansible playbook') {
+            steps {
+                sshagent(credentials: ['ansible-ssh-key']) {
+                    sh """
+                      ansible-playbook -i inventory_dynamic.ini \
                         --extra-vars @roles/nginx/vars/main.yml \
-                        ${env.PLAYBOOK}'
-                    }
+                        ${env.PLAYBOOK}
+                    """
                 }
             }
         }
@@ -131,5 +128,5 @@ EOF
                 }
             }
         }
+    }
 }
-
