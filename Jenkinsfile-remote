@@ -54,16 +54,17 @@ pipeline {
             }
         }
 
-        // stage('Prepare SSH') {
-        //     steps {
-        //         sh """
-        //           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-        //           cp /var/jenkins_home/.ssh/imtec.pem ${env.SSH_KEY_PATH}
-        //           chmod 600 ${env.SSH_KEY_PATH}
-        //           ssh-keyscan -H ${params.IP} >> ~/.ssh/known_hosts
-        //         """
-        //     }
-        // }
+         stage('Add host to known_hosts') {
+            steps {
+                sshagent(['ansible-ssh-key']) {
+                    sh '''
+                        mkdir -p ~/.ssh
+                        chmod 700 ~/.ssh
+                        ssh-keyscan -H ${IP} >> ~/.ssh/known_hosts
+                    '''
+                }
+            }
+        }
 
         stage('Generate Ansible vars file') {
             steps {
