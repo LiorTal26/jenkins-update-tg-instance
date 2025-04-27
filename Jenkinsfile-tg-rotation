@@ -77,10 +77,25 @@ EOF
         /* Rolling update */
         stage('Rolling update') {
             steps {
-                script {
+                sshagent(['ansible-ssh-key']) {
+                    script {
                     env.INSTANCE_IDS.tokenize().each { instance ->
                         echo "\\n──── Processing ${instance} ────"
 
+                        sh """
+                            HOST_IP_PRIVATE=\$(aws ec2 describe-instances \
+                                       --instance-ids ${instance} \
+                                       --region ${env.REGION} \
+                                       --query 'Reservations[0].Instances[0].PrivateIpAddress' \
+                                       --output text)
+                        """
+                        sh """
+                            mkdir -p ~/.ssh
+                            chmod 700 ~/.ssh
+                            ssh-keyscan -H ${HOST_IP_PRIVATE} >> ~/.ssh/known_hosts
+                        """
+                        echo "Resolved private IP for ${instance}: ${ip_private}"
+                        
                         /* 1) Deregister this instance on port 6789 */
                         sh """
                           aws elbv2 deregister-targets \
@@ -100,16 +115,10 @@ EOF
 
                         /* 3) Build inventory.ini and run playbook */
                         sh """
-                          HOST_IP=\$(aws ec2 describe-instances \
-                                       --instance-ids ${instance} \
-                                       --region ${env.REGION} \
-                                       --query 'Reservations[0].Instances[0].PublicIpAddress' \
-                                       --output text)
+                            echo '[servers]' > inventory.ini
+                            echo \"\${HOST_IP_PRIVATE} ansible_user=${env.ANSIBLE_USER}\" >> inventory.ini
 
-                          echo '[servers]' > inventory.ini
-                          echo \"\${HOST_IP} ansible_user=${env.ANSIBLE_USER} ansible_ssh_private_key_file=${env.SSH_KEY_PATH}\" >> inventory.ini
-
-                          ansible-playbook -i inventory.ini ${env.PLAYBOOK}
+                            ansible-playbook -i inventory.ini ${env.PLAYBOOK}
                         """
 
                         /* 4) Re-register on port 6789 and wait healthy */
@@ -118,7 +127,7 @@ EOF
                             --target-group-arn ${env.TARGET_GROUP_ARN} \
                             --region ${env.REGION} \
                             --targets Id=${instance},Port=${env.NGINX_PORT}
-
+                        
                           aws elbv2 wait target-in-service \
                             --target-group-arn ${env.TARGET_GROUP_ARN} \
                             --region ${env.REGION} \
@@ -128,6 +137,7 @@ EOF
                     }
                 }
             }
+        }
         }
 
     }

@@ -1,0 +1,56 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'NAME', defaultValue: 'Guest', description: 'Enter a name to personalize the HTML page')
+        string(name: 'IP', defaultValue: '', description: 'Enter the IP address of the target server')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git url: 'https://github.com/Tal9954/ansible_nginx_deployment', branch: 'master'
+            }
+        }
+
+        stage('Prepare SSH') {
+            steps {
+                sshagent(['ansible-ssh-key']) {
+                    sh '''
+                        mkdir -p ~/.ssh
+                        chmod 700 ~/.ssh
+                        ssh-keyscan -H ${IP} >> ~/.ssh/known_hosts
+                    '''
+                }
+            }
+        }
+
+        stage('Process Instance') {
+            steps {
+                sshagent(['ansible-ssh-key']) {
+                    script {
+                        if (params.IP == '') {
+                            error "IP parameter must be provided"
+                        }
+
+                        echo "Using IP: ${params.IP}"
+
+                        writeFile file: 'inventory_dynamic.yml', text: """
+                        all:
+                          hosts:
+                            ${params.IP}:
+                              ansible_user: ubuntu
+                        """.stripIndent()
+
+                        sh """
+                            ansible-playbook -i inventory_dynamic.yml \
+                            --private-key=~/.ssh/id_rsa \
+                            --extra-vars "name=${params.NAME}" \
+                            playbook-Nginx.yml
+                        """
+                    }
+                }
+            }
+        }
+    }
+}

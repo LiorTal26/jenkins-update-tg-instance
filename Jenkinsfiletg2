@@ -1,0 +1,102 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'NAME', defaultValue: 'Guest', description: 'Enter a name to personalize the HTML page')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git url: 'https://github.com/Tal9954/ansible_nginx_deployment', branch: 'master'
+            }
+        }
+
+        stage('Prepare SSH') {
+            steps {
+                sshagent(['ansible-ssh-key']) {
+                    sh '''
+                        mkdir -p ~/.ssh
+                        chmod 700 ~/.ssh
+                        ssh-keyscan -H ansible-tal.aws.cts.care >> ~/.ssh/known_hosts
+                    '''
+                }
+            }
+        }
+
+        stage('Get Target Group ARN and Instances') {
+            steps {
+                sshagent(['ansible-ssh-key']) {
+                    script {
+                        def targetGroupArn = sh(
+                            script: "aws elbv2 describe-target-groups --names tg-tal | jq -r '.TargetGroups[].TargetGroupArn'",
+                            returnStdout: true
+                        ).trim()
+
+                        def instances = sh(
+                            script: "aws elbv2 describe-target-health --target-group-arn ${targetGroupArn} | jq -r '.TargetHealthDescriptions[].Target.Id'",
+                            returnStdout: true
+                        ).trim().split("\n")
+
+                        env.INSTANCE_ARRAY = instances.join(',')
+                        env.TG_ARN = targetGroupArn
+                    }
+                }
+            }
+        }
+
+        stage('Process Instances in Target Group') {
+            steps {
+                sshagent(['ansible-ssh-key']) {
+                    script {
+                        def instances = env.INSTANCE_ARRAY.split(',')
+
+                        for (instance in instances) {
+                            echo "Processing instance: ${instance}"
+
+                            def ip = sh(
+                                script: "aws ec2 describe-instances --instance-ids ${instance} --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text",
+                                returnStdout: true
+                            ).trim()
+
+                            echo "Resolved private IP for ${instance}: ${ip}"
+                            sh "ssh-keyscan -H ${ip} >> ~/.ssh/known_hosts"
+
+                            writeFile file: 'inventory_dynamic.yml', text: """
+                                all:
+                                  hosts:
+                                    ${ip}:
+                                      ansible_user: ubuntu
+                            """.stripIndent()
+
+                            sh "aws elbv2 deregister-targets --target-group-arn ${env.TG_ARN} --targets Id=${instance}"
+
+                            sh """
+                                ansible-playbook -i inventory_dynamic.yml \
+                                --private-key=~/.ssh/id_rsa \
+                                --extra-vars "name=${params.NAME}" \
+                                playbook-Nginx.yml
+                            """
+
+                            sh "aws elbv2 register-targets --target-group-arn ${env.TG_ARN} --targets Id=${instance}"
+
+                            echo "Waiting for instance ${instance} to become healthy..."
+                            timeout(time: 5, unit: 'MINUTES') {
+                                waitUntil {
+                                    def health = sh(
+                                        script: "aws elbv2 describe-target-health --target-group-arn ${env.TG_ARN} --targets Id=${instance} | jq -r '.TargetHealthDescriptions[0].TargetHealth.State'",
+                                        returnStdout: true
+                                    ).trim()
+                                    echo "Current state: ${health}"
+                                    return (health == "healthy")
+                                }
+                            }
+
+                            echo "Instance ${instance} is healthy. Moving on..."
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
