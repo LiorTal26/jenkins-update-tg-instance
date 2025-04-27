@@ -80,7 +80,7 @@ EOF
             }
         }
 
-        stage('Deploy Nginx') {
+        stage('build inventroy') {
             steps {
                 script {
                     /* 1. build inventory */
@@ -91,13 +91,19 @@ ${params.IP} ansible_user=${env.ANSIBLE_USER}
 EOF
                       echo '[INFO] Created inventory_dynamic.ini'
                     """
+                    
+                }
+            }
+        }
+           stage('Build nginx playbook') {
+            steps {
+                sshagent(['ansible-ssh-key']) {
+                    script 
 
-                    /* 2. run playbook */
-                    sh """
-                      ansible-playbook -i inventory_dynamic.ini \
+                        sh 'ansible-playbook -i inventory_dynamic.ini \
                         --extra-vars @roles/nginx/vars/main.yml \
-                        ${env.PLAYBOOK}
-                    """
+                        ${env.PLAYBOOK}'
+                    }
                 }
             }
         }
