@@ -47,7 +47,7 @@ pipeline {
             steps {
                 script {
                     if (!params.IP) {
-                        error "IP parameter missing – cloud-init must supply it"
+                        error "IP parameter missing - cloud-init must supply it"
                     }
                     echo "Caller IP: ${params.IP}"
                 }
