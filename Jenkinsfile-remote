@@ -121,6 +121,7 @@ EOF
 
         stage('Register in Target-Group') {
             steps {
+                sshagent(['ansible-ssh-key']) {
                 script {
                     def tgArn      = get_group_arn(env.TARGET_GROUP_NAME, env.REGION)
                     def instanceId = private_ip_to_instance(params.IP, env.REGION)
@@ -140,6 +141,7 @@ EOF
                         --targets Id=${instanceId},Port=${env.NGINX_PORT}
                     """
                 }
+            }
             }
         }
     }
