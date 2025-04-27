@@ -1,0 +1,119 @@
+/*********************************************************************
+ * Rolling-in EC2 instance that called us (one host at a time)
+ *********************************************************************/
+
+/* ─── Helper functions ─────────────────────────────────────────── */
+def get_group_arn(String name, String region) {
+    sh(
+        script: """
+          aws elbv2 describe-target-groups --names '${name}' \
+            --region ${region} \
+            --query 'TargetGroups[0].TargetGroupArn' --output text
+        """,
+        returnStdout: true
+    ).trim()
+}
+def ip_to_instance(String ip, String region) {
+    sh(
+        script: """
+          aws ec2 describe-instances \
+            --filters "Name=ip-address,Values=${ip}" \
+            --region ${region} \
+            --query 'Reservations[0].Instances[0].InstanceId' \
+            --output text
+        """,
+        returnStdout: true
+    ).trim()
+}
+/* ─────────────────────────────────────────────────────────────── */
+
+pipeline {
+    agent any
+
+    /* parameters supplied by the curl-trigger */
+    parameters {
+        string(name: 'IP',            defaultValue: '',      description: 'Public IP of the caller (auto-filled by cloud-init)')
+        string(name: 'headers_name',  defaultValue: 'Guest', description: 'Header value for the demo site')
+    }
+
+    /* static env vars */
+    environment {
+        REGION            = 'il-central-1'
+        TARGET_GROUP_NAME = 'tg-lior'
+        SSH_KEY_PATH      = '~/.ssh/imtec.pem'
+        ANSIBLE_USER      = 'ubuntu'
+        PLAYBOOK          = 'playbook.yml'   // <------------ adjust if needed
+        NGINX_PORT        = '6789'
+    }
+
+    stages {
+
+        stage('Sanity') {
+            steps {
+                script {
+                    if (!params.IP) {
+                        error "IP parameter missing -- cloud-init must supply it"
+                    }
+                    echo "Caller's IP: ${params.IP}"
+                }
+            }
+        }
+
+        /* prepare SSH on the Jenkins agent */
+        stage('Prepare SSH') {
+            steps {
+                sh """
+                  mkdir -p ~/.ssh && chmod 700 ~/.ssh
+                  cp /var/jenkins_home/.ssh/imtec.pem ~/.ssh/id_rsa
+                  chmod 600 ~/.ssh/id_rsa
+                  ssh-keyscan -H ${params.IP} >> ~/.ssh/known_hosts
+                """
+            }
+        }
+
+        /* run playbook against the single host */
+        stage('Deploy Nginx') {
+            steps {
+                writeFile file: 'inventory_dynamic.yml', text: """
+                all:
+                  hosts:
+                    ${params.IP}:
+                      ansible_user: ${env.ANSIBLE_USER}
+                """.stripIndent()
+
+                sh """
+                  ansible-playbook -i inventory_dynamic.yml \
+                    --private-key=~/.ssh/id_rsa \
+                    --extra-vars "name=${params.headers_name}" \
+                    ${env.PLAYBOOK}
+                """
+            }
+        }
+
+        /* register the instance in the target group */
+        stage('Register in Target-Group') {
+            steps {
+                script {
+                    /* discover TG ARN and Instance-ID at runtime */
+                    def tgArn = get_group_arn(env.TARGET_GROUP_NAME, env.REGION)
+                    def instanceId = ip_to_instance(params.IP, env.REGION)
+
+                    echo "Target-Group ARN : ${tgArn}"
+                    echo "Instance ID      : ${instanceId}"
+
+                    sh """
+                      aws elbv2 register-targets \
+                        --target-group-arn ${tgArn} \
+                        --region ${env.REGION} \
+                        --targets Id=${instanceId},Port=${env.NGINX_PORT}
+
+                      aws elbv2 wait target-in-service \
+                        --target-group-arn ${tgArn} \
+                        --region ${env.REGION} \
+                        --targets Id=${instanceId},Port=${env.NGINX_PORT}
+                    """
+                }
+            }
+        }
+    }
+}
