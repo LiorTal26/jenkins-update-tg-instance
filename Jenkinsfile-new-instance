@@ -44,6 +44,7 @@ pipeline {
     parameters {
         string(name: 'IP',           defaultValue: '',      description: 'Public IP sent by cloud-init')
         string(name: 'headers_name', defaultValue: 'Guest', description: 'Header value Nginx will echo')
+        string(name: 'CRED_ID', defaultValue: '05e6adcb-0128-4101-bca4-350064a1de3d')
     }
 
     environment {
@@ -122,9 +123,11 @@ EOF
         stage('Register in Target-Group') {
     steps {
         withCredentials([[
-            $class: 'AmazonWebServicesCredentialsBinding',
-            credentialsId: 'aws-imtech'        // ← your AWS creds ID
-        ]]) {
+                $class: 'AmazonWebServicesCredentialsBinding',
+                credentialsId: "${CRED_ID}",
+                accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+            ]]) {
             script {
                 /* resolve IDs */
                 def tgArn      = get_group_arn(env.TARGET_GROUP_NAME, env.REGION)
