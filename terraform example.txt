@@ -1,0 +1,134 @@
+###############################################################################
+# main.tf – ASG + TG + Launch Template קיימת
+###############################################################################
+
+terraform {
+  required_version = ">= 1.5"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+###############################################################################
+# שליפת Launch Template קיים
+###############################################################################
+data "aws_launch_template" "web" {
+  id = "lt-02f75ca85d113cd96"
+}
+
+###############################################################################
+# שליפת Target Group קיים (tg-lior)
+###############################################################################
+data "aws_lb_target_group" "tg_lior" {
+  arn = "arn:aws:elasticloadbalancing:il-central-1:314525640319:targetgroup/tg-lior/07b281f87517f894"
+}
+
+###############################################################################
+# שליפת Subnets ב-VPC על-פי AZ-ים (ל-Provider v5 → data aws_subnets) :contentReference[oaicite:0]{index=0}
+###############################################################################
+data "aws_subnets" "public" {
+  filter {
+    name   = "vpc-id"
+    values = [var.vpc_id]
+  }
+
+  # מחזיר תתי-רשת בכל אחת מה-AZ-ים שציינת
+  filter {
+    name   = "availability-zone"
+    values = ["il-central-1a", "il-central-1b"]
+  }
+
+  # אם יש תגים שמציינים Public, הסר את ההערות:
+  # filter {
+  #   name   = "tag:Tier"
+  #   values = ["public"]
+  # }
+}
+
+###############################################################################
+# Security Group בסיסי (HTTP/HTTPS החוצה/פנימה)
+###############################################################################
+resource "aws_security_group" "web" {
+  name_prefix = "asg-lior-terraform-"
+  description = "Allow HTTP/HTTPS from anywhere"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "asg-lior-sg"
+  }
+}
+
+###############################################################################
+# Auto Scaling Group – מחובר ל-TG ו-Launch Template קיימים
+###############################################################################
+resource "aws_autoscaling_group" "web" {
+  name                 = "asg-lior-terraform"
+  desired_capacity     = 1
+  max_size             = 2
+  min_size             = 1
+  health_check_type    = "EC2"
+  vpc_zone_identifier  = data.aws_subnets.public.ids
+
+  #‎ שימוש ב-Launch Template קיים
+  launch_template {
+    id      = data.aws_launch_template.web.id
+    version = "$Latest"
+  }
+
+  # חיבור ל-Target Group קיים
+  target_group_arns = [data.aws_lb_target_group.tg_lior.arn]  # :contentReference[oaicite:1]{index=1}
+
+  # תיוג מופעים
+  tag {
+    key                 = "Name"
+    value               = "asg-lior-instance"
+    propagate_at_launch = true
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+###############################################################################
+# variables.tf (נכלל כאן לנוחות)
+###############################################################################
+variable "aws_region" {
+  type        = string
+  default     = "il-central-1"
+  description = "AWS region for deployment"
+}
+
+variable "vpc_id" {
+  type        = string
+  description = "Existing VPC ID (e.g., vpc-042cee0fdc6a5a7e2)"
+}
+
