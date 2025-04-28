@@ -120,50 +120,36 @@ EOF
         }
 
         stage('Register in Target-Group') {
-            steps {
-                
-                script {
-                    // def tgArn      = get_group_arn(env.TARGET_GROUP_NAME, env.REGION)
-                    // def instanceId = private_ip_to_instance(params.IP, env.REGION)
+    steps {
+        withCredentials([[
+            $class: 'AmazonWebServicesCredentialsBinding',
+            credentialsId: 'aws-imtech'        // ← your AWS creds ID
+        ]]) {
+            script {
+                /* resolve IDs */
+                def tgArn      = get_group_arn(env.TARGET_GROUP_NAME, env.REGION)
+                def instanceId = private_ip_to_instance(params.IP, env.REGION)
 
-                    def tgArn = sh(
-                        script: """
-                            aws elbv2 describe-target-groups --names '${TARGET_GROUP_NAME}' \
-                            --region ${env.REGION} \
-                            --query 'TargetGroups[0].TargetGroupArn' --output text
-                        """,
-                        returnStdout: true
-                    ).trim()
-                    echo "Target-Group ARN : ${tgArn}"
+                echo "Target-Group ARN : ${tgArn}"
+                echo "Instance ID      : ${instanceId}"
 
-                    def instanceId = sh(
-                        script: """
-                            aws ec2 describe-instances \
-                                --region ${env.REGION} \
-                                --filters Name=private-ip-address,Values=${params.IP} \
-                                --query 'Reservations[].Instances[].InstanceId' \
-                                --output text
-                        """,
-                        returnStdout: true
-                    ).trim()
-                    echo "Instance ID      : ${instanceId}"
+                /* register + wait healthy */
+                sh """
+                  aws elbv2 register-targets \
+                    --target-group-arn ${tgArn} \
+                    --region ${env.REGION} \
+                    --targets Id=${instanceId},Port=${env.NGINX_PORT}
 
-                    sh """
-                    
-                      aws elbv2 register-targets \
-                        --target-group-arn ${tgArn} \
-                        --region ${env.REGION} \
-                        --targets Id=${instanceId},Port=${env.NGINX_PORT}
-
-                      aws elbv2 wait target-in-service \
-                        --target-group-arn ${tgArn} \
-                        --region ${env.REGION} \
-                        --targets Id=${instanceId},Port=${env.NGINX_PORT}
-                    """
-                }
-            
+                  aws elbv2 wait target-in-service \
+                    --target-group-arn ${tgArn} \
+                    --region ${env.REGION} \
+                    --targets Id=${instanceId},Port=${env.NGINX_PORT}
+                """
             }
         }
+    }
+}
+
     }
 }
 
